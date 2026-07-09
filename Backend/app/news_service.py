@@ -1,16 +1,22 @@
 """Fetch recent, relevant news headlines for a currency pair.
 
-Uses the GDELT 2.0 DOC API (free, no key). GDELT matches article *bodies*, so a
-raw query returns lots of off-topic pieces that merely mention "dollar" somewhere.
-To fix relevance we fetch broad, then keep only articles whose *headline* actually
-mentions one of the pair's currencies (or an explicit FX term), ranked by how
-directly the headline is about the pair.
+Two sources, combined and de-duplicated:
+  * Financial RSS feeds (ForexLive, CNBC Currencies, WSJ Markets) — free, no key,
+    and reliable from cloud IPs. This is the backbone.
+  * GDELT 2.0 DOC API — free, query-specific, but rate-limits shared/cloud IPs
+    aggressively, so it's best-effort only.
 
-Docs: https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/
+Both sources return noisy headlines (feeds mix in unrelated stories), so every
+article is scored by whether its *headline* actually mentions one of the pair's
+currencies; anything that doesn't is dropped. This is what makes explanations
+grounded in genuinely relevant news instead of whatever mentioned "dollar".
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 import httpx
 
@@ -22,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+
+# Reliable, key-free financial news feeds (RSS 2.0).
+RSS_FEEDS = [
+    "https://www.forexlive.com/feed/",
+    "https://www.cnbc.com/id/10000664/device/rss/rss.html",  # CNBC Currencies
+    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",         # WSJ Markets
+]
+
+HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; FXDashboard/1.0)"}
 
 
 # GDELT search phrases per currency (currency name + central bank).
@@ -71,8 +86,8 @@ def _relevance_score(title: str, base: str, quote: str) -> int:
     """Score a headline's relevance to the pair. Higher = more on-topic.
 
     A specific currency mention is worth far more than a generic FX word, so
-    copper/tech/markets noise that merely mentions "currency" scores 0 and is
-    dropped, while "Rupee slips as dollar firms after Fed" scores high.
+    unrelated markets/tech noise that merely mentions "currency" scores low and
+    is dropped, while "Rupee slips as dollar firms after Fed" scores high.
     """
     low = f" {title.lower()} "
     score = 0
@@ -89,51 +104,91 @@ def _relevance_score(title: str, base: str, quote: str) -> int:
     return score
 
 
-async def fetch_pair_news(pair: str) -> list[dict]:
-    """Return recent, headline-relevant articles for the pair.
-
-    Each item: {title, url, source, published, score}. Returns [] on any
-    failure so the explanation flow degrades gracefully rather than erroring.
-    """
-    base, quote = parse_pair(pair)
-
+async def _fetch_gdelt(client: httpx.AsyncClient, base: str, quote: str) -> list[dict]:
+    """Best-effort GDELT fetch. Returns [] on throttle/error."""
     params = {
         "query": _build_query(base, quote),
         "mode": "artlist",
         "format": "json",
-        # Fetch broad so the headline filter has material to rank.
         "maxrecords": 40,
         "sort": "datedesc",
         "timespan": "3d",
     }
-
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(GDELT_URL, params=params)
-            response.raise_for_status()
-            # GDELT returns HTTP 200 with a plain-text notice when rate-limited,
-            # which is not JSON — surface that clearly instead of a decode error.
-            if "application/json" not in response.headers.get("content-type", ""):
-                logger.warning(
-                    "GDELT throttled/non-JSON for %s: %s", pair, response.text[:120]
-                )
-                return []
-            data = response.json()
+        response = await client.get(GDELT_URL, params=params, headers=HTTP_HEADERS)
+        response.raise_for_status()
+        # GDELT returns HTTP 200 with a plain-text notice when rate-limited.
+        if "application/json" not in response.headers.get("content-type", ""):
+            logger.info("GDELT throttled/non-JSON: %s", response.text[:100])
+            return []
+        articles = response.json().get("articles", []) or []
     except Exception as error:
-        logger.warning("GDELT news fetch failed for %s: %s", pair, error)
+        logger.info("GDELT fetch skipped: %s", error)
         return []
 
-    articles = data.get("articles", []) or []
+    return [
+        {
+            "title": (a.get("title") or "").strip(),
+            "url": a.get("url", ""),
+            "source": a.get("domain", ""),
+            "published": a.get("seendate", ""),
+        }
+        for a in articles
+        if (a.get("title") or "").strip()
+    ]
+
+
+async def _fetch_rss(client: httpx.AsyncClient, url: str) -> list[dict]:
+    """Fetch and parse a single RSS 2.0 feed. Returns [] on error."""
+    try:
+        response = await client.get(url, headers=HTTP_HEADERS, follow_redirects=True)
+        response.raise_for_status()
+        # Parse bytes (not str) so an XML encoding declaration doesn't error.
+        root = ET.fromstring(response.content)
+    except Exception as error:
+        logger.info("RSS fetch failed for %s: %s", url, error)
+        return []
+
+    items: list[dict] = []
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        if not title:
+            continue
+        items.append(
+            {
+                "title": title,
+                "url": link,
+                "source": urlparse(link).netloc or urlparse(url).netloc,
+                "published": (item.findtext("pubDate") or "").strip(),
+            }
+        )
+    return items
+
+
+async def fetch_pair_news(pair: str) -> list[dict]:
+    """Return recent, headline-relevant articles for the pair.
+
+    Each item: {title, url, source, published, score}. Returns [] on total
+    failure so the explanation flow degrades gracefully rather than erroring.
+    """
+    base, quote = parse_pair(pair)
+
+    async with httpx.AsyncClient(timeout=12) as client:
+        tasks = [_fetch_gdelt(client, base, quote)]
+        tasks += [_fetch_rss(client, url) for url in RSS_FEEDS]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    raw: list[dict] = []
+    for res in results:
+        if isinstance(res, list):
+            raw.extend(res)
 
     scored: list[dict] = []
     seen_titles: set[str] = set()
 
-    for article in articles:
-        title = (article.get("title") or "").strip()
-        if not title:
-            continue
-
-        # De-duplicate near-identical syndicated headlines.
+    for article in raw:
+        title = article["title"]
         key = title.lower()
         if key in seen_titles:
             continue
@@ -144,17 +199,9 @@ async def fetch_pair_news(pair: str) -> list[dict]:
             continue
 
         seen_titles.add(key)
-        scored.append(
-            {
-                "title": title,
-                "url": article.get("url", ""),
-                "source": article.get("domain", ""),
-                "published": article.get("seendate", ""),
-                "score": score,
-            }
-        )
+        scored.append({**article, "score": score})
 
-    # Most relevant first; stable sort keeps GDELT's recency order within a tier.
+    # Most relevant first.
     scored.sort(key=lambda a: a["score"], reverse=True)
 
     return scored[: settings.NEWS_MAX_ARTICLES]
