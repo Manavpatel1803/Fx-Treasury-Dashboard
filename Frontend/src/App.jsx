@@ -20,6 +20,37 @@ import {
 
 import { api } from "./api";
 
+function Logo() {
+  return (
+    <span className="logo-mark" aria-label="FX Dashboard logo">
+      <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="64" height="64" rx="16" fill="url(#logoGrad)" />
+        <path
+          d="M13 42 L26 30 L35 37 L51 21"
+          stroke="white"
+          strokeWidth="4.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M42 21 L51 21 L51 30"
+          stroke="white"
+          strokeWidth="4.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <circle cx="13" cy="42" r="4" fill="#bfe0ff" />
+        <defs>
+          <linearGradient id="logoGrad" x1="0" y1="0" x2="64" y2="64">
+            <stop stopColor="#47bfff" />
+            <stop offset="1" stopColor="#1e6bff" />
+          </linearGradient>
+        </defs>
+      </svg>
+    </span>
+  );
+}
+
 function StatCard({ title, value, subtitle }) {
   return (
     <div className="card stat-card">
@@ -529,9 +560,14 @@ async function collectSnapshot() {
   return (
     <main>
       <header className="hero">
-        <div>
-          <p className="eyebrow">FinTech Treasury System</p>
-          <h1>FX Rate Monitor & Treasury Dashboard</h1>
+        <div className="hero-text">
+          <div className="brand">
+            <Logo />
+            <div>
+              <p className="eyebrow">FinTech Treasury System</p>
+              <h1>FX Rate Monitor & Treasury Dashboard</h1>
+            </div>
+          </div>
           <p>
             Track FX pairs, store rate snapshots, monitor movements, manage
             exposure, and generate treasury-style business summaries.

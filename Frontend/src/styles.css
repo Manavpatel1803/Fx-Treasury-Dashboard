@@ -28,8 +28,34 @@ main {
   box-shadow: 0 24px 60px rgba(15, 37, 87, 0.25);
 }
 
+.hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo-mark {
+  flex-shrink: 0;
+  width: 58px;
+  height: 58px;
+  display: block;
+  filter: drop-shadow(0 6px 14px rgba(30, 107, 255, 0.45));
+}
+
+.logo-mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .hero h1 {
-  margin: 8px 0;
+  margin: 4px 0;
   font-size: clamp(32px, 5vw, 52px);
   letter-spacing: -1px;
 }
