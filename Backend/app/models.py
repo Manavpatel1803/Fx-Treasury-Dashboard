@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text
 
 from app.database import Base
 
@@ -35,6 +35,18 @@ class AlertEvent(Base):
     pair = Column(String(20), index=True, nullable=False)
     movement_percent = Column(Float, nullable=False)
     message = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class Explanation(Base):
+    __tablename__ = "explanations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pair = Column(String(20), index=True, nullable=False)
+    move_percent = Column(Float, nullable=True)
+    direction = Column(String(10), nullable=False)
+    explanation_text = Column(String(1000), nullable=False)
+    sources_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 

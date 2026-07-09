@@ -87,3 +87,19 @@ class LiveRateOut(BaseModel):
     bid_rate: float
     ask_rate: float
     spread: float
+
+
+class ExplanationSource(BaseModel):
+    title: str
+    url: str
+    source: str
+
+
+class ExplanationOut(BaseModel):
+    pair: str
+    move_percent: float | None
+    direction: str
+    explanation: str
+    sources: list[ExplanationSource]
+    generated_at: datetime
+    cached: bool

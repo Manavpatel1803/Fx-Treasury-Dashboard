@@ -1,0 +1,16 @@
+# Secrets (.env.example has a different name, so it is NOT ignored)
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.db
+
+# Node / Vite
+node_modules/
+dist/
+
+# Editor / OS
+.DS_Store
+.claude/

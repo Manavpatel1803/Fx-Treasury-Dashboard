@@ -13,11 +13,13 @@ from app.schemas import (
     AlertEventOut,
     ExposureCreate,
     ExposureOut,
+    ExplanationOut,
     PairSummaryOut,
     RateSnapshotOut,
     TreasurySummaryOut,
     LiveRateOut,
 )
+from app.explain_service import explain_pair
 from app.fx_service import (
     collect_snapshot_for_pair,
     build_pair_summary,
@@ -178,6 +180,16 @@ def list_exposures(db: Session = Depends(get_db)):
 @app.get("/treasury-summary", response_model=TreasurySummaryOut)
 def treasury_summary(db: Session = Depends(get_db)):
     return build_treasury_summary(db)
+
+@app.get("/explain/{pair:path}", response_model=ExplanationOut)
+async def explain(pair: str, force: bool = False, db: Session = Depends(get_db)):
+    try:
+        parse_pair(pair)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    return await explain_pair(db, pair, force=force)
+
 
 @app.get("/rates/live", response_model=list[LiveRateOut])
 async def live_rates():

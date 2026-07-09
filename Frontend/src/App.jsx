@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { RefreshCw, TrendingUp, Bell, WalletCards } from "lucide-react";
+import {
+  RefreshCw,
+  TrendingUp,
+  TrendingDown,
+  Bell,
+  WalletCards,
+  Sparkles,
+} from "lucide-react";
 
 import {
   LineChart,
@@ -326,6 +333,70 @@ function LiveRatesPanel({ liveRates }) {
   );
 }
 
+function WhyItMoved({ pair, explanation, loading, onExplain }) {
+  const change = explanation?.move_percent;
+  const isUp = explanation?.direction === "up";
+  const isDown = explanation?.direction === "down";
+
+  return (
+    <div className="card why-card">
+      <div className="section-title">
+        <Sparkles size={20} />
+        <h3>Why did {pair} move?</h3>
+      </div>
+
+      <button
+        className="why-button"
+        onClick={() => onExplain(pair)}
+        disabled={loading}
+      >
+        {loading ? "Analysing news…" : `Explain ${pair}`}
+      </button>
+
+      {explanation && (
+        <div className="why-body">
+          <div className="why-headline">
+            {isUp && <TrendingUp size={18} className="positive" />}
+            {isDown && <TrendingDown size={18} className="negative" />}
+            <span
+              className={
+                isUp ? "positive" : isDown ? "negative" : "muted"
+              }
+            >
+              {change === null || change === undefined
+                ? "Little movement"
+                : `${change > 0 ? "+" : ""}${change}%`}
+            </span>
+            {explanation.cached && <span className="badge">cached</span>}
+          </div>
+
+          <p className="why-text">{explanation.explanation}</p>
+
+          {explanation.sources?.length > 0 && (
+            <details className="why-sources">
+              <summary>Sources ({explanation.sources.length})</summary>
+              <ul className="list">
+                {explanation.sources.map((s, i) => (
+                  <li key={i}>
+                    <a href={s.url} target="_blank" rel="noreferrer">
+                      {s.title}
+                    </a>{" "}
+                    <span className="muted">— {s.source}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          <p className="disclaimer muted">
+            Educational context grounded in recent news — not financial advice.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [rates, setRates] = useState([]);
   const [selectedPair, setSelectedPair] = useState("GBP/USD");
@@ -336,6 +407,8 @@ function App() {
   const [exposures, setExposures] = useState([]);
   const [loading, setLoading] = useState(false);
   const [liveRates, setLiveRates] = useState([]);
+  const [explanation, setExplanation] = useState(null);
+  const [explaining, setExplaining] = useState(false);
 
   async function loadDashboard(pair = selectedPair) {
     const [
@@ -386,12 +459,27 @@ async function collectSnapshot() {
 
   async function handlePairChange(pair) {
     setSelectedPair(pair);
+    setExplanation(null);
 
     try {
       const historyRows = await api.getHistory(pair);
       setHistory(historyRows);
     } catch (error) {
       console.error(error);
+    }
+  }
+
+  async function explainPair(pair) {
+    setExplaining(true);
+
+    try {
+      const result = await api.getExplanation(pair);
+      setExplanation(result);
+    } catch (error) {
+      console.error("Explain error:", error);
+      alert("Could not fetch explanation.");
+    } finally {
+      setExplaining(false);
     }
   }
 
@@ -416,16 +504,18 @@ async function collectSnapshot() {
   }
 
   useEffect(() => {
-     loadLiveRates();
-     const intervalId = setInterval(() => {
-    loadLiveRates();
-  }, 30000);
-
-  return () => clearInterval(intervalId);
-
+    // Load the main dashboard data on mount.
     loadDashboard().catch((error) => {
       console.error(error);
     });
+
+    // Load live rates now, then refresh them every 30s.
+    loadLiveRates();
+    const intervalId = setInterval(() => {
+      loadLiveRates();
+    }, 30000);
+
+    return () => clearInterval(intervalId);
   }, []);
 
   const activeAlerts = alertEvents.length;
@@ -493,6 +583,15 @@ async function collectSnapshot() {
         />
 
         <HistoryChart pair={selectedPair} history={history} />
+      </section>
+
+      <section className="dashboard-grid">
+        <WhyItMoved
+          pair={selectedPair}
+          explanation={explanation}
+          loading={explaining}
+          onExplain={explainPair}
+        />
       </section>
 
       <section className="dashboard-grid">

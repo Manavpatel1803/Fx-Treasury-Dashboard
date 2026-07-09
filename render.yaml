@@ -1,0 +1,34 @@
+# Render Blueprint — deploys the FastAPI backend.
+# In Render: New > Blueprint > connect this repo. Then set the secret env vars
+# (marked sync:false) in the dashboard: TWELVE_DATA_API_KEY, GEMINI_API_KEY,
+# and FRONTEND_ORIGIN (your Vercel URL).
+services:
+  - type: web
+    name: fx-treasury-api
+    runtime: python
+    rootDir: Backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.5"
+      - key: MARKET_DATA_PROVIDER
+        value: twelvedata
+      - key: FX_API_BASE_URL
+        value: https://api.frankfurter.dev/v1
+      - key: TWELVE_DATA_BASE_URL
+        value: https://api.twelvedata.com
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: DEFAULT_PAIRS
+        value: GBP/USD,EUR/USD,USD/INR,EUR/GBP
+      # Secrets — set these manually in the Render dashboard:
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false

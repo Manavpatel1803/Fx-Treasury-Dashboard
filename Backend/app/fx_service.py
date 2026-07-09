@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import random
+import logging
+
 import httpx
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,12 @@ from app.config import settings
 from app.models import RateSnapshot, AlertRule, AlertEvent, Exposure
 
 
+logger = logging.getLogger(__name__)
+
+
+# Last-resort static rates used ONLY when every live provider is unreachable.
+# These are intentionally flat (no synthetic movement) so the dashboard never
+# shows fabricated price moves — an unavailable rate is reported honestly.
 FALLBACK_RATES = {
     "GBP/USD": 1.27,
     "EUR/USD": 1.08,
@@ -30,27 +37,98 @@ def parse_pair(pair: str) -> tuple[str, str]:
     return base, quote
 
 
+async def _fetch_twelvedata(base: str, quote: str) -> float:
+    """Real-time / intraday rate from Twelve Data. Requires an API key."""
+    url = f"{settings.TWELVE_DATA_BASE_URL}/exchange_rate"
+    params = {
+        "symbol": f"{base}/{quote}",
+        "apikey": settings.TWELVE_DATA_API_KEY,
+    }
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+    # Twelve Data reports quota/errors in the body with a 200 status.
+    if "rate" not in data:
+        raise ValueError(data.get("message", "Twelve Data returned no rate"))
+
+    return float(data["rate"])
+
+
+async def _fetch_frankfurter(base: str, quote: str) -> float:
+    """Daily ECB reference rate. Free, no key, but no intraday movement."""
+    url = f"{settings.FX_API_BASE_URL}/latest"
+    params = {"base": base, "symbols": quote}
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+    return float(data["rates"][quote])
+
+
 async def fetch_rate(pair: str) -> float:
+    """Fetch the current rate for a pair from the configured provider.
+
+    Prefers Twelve Data (real intraday) when a key is set, falling back to
+    Frankfurter, and only then to a flat static rate. Never fabricates a move.
+    """
     base, quote = parse_pair(pair)
 
-    url = f"{settings.FX_API_BASE_URL}/rates/latest"
-    params = {
-        "base": base,
-        "symbols": quote
-    }
+    use_twelvedata = (
+        settings.MARKET_DATA_PROVIDER.lower() == "twelvedata"
+        and settings.TWELVE_DATA_API_KEY
+    )
+
+    try:
+        if use_twelvedata:
+            return round(await _fetch_twelvedata(base, quote), 6)
+        return round(await _fetch_frankfurter(base, quote), 6)
+    except Exception as error:
+        logger.warning("Live rate fetch failed for %s/%s: %s", base, quote, error)
+
+    # Second attempt: if Twelve Data failed, try the free daily source.
+    if use_twelvedata:
+        try:
+            return round(await _fetch_frankfurter(base, quote), 6)
+        except Exception as error:
+            logger.warning("Frankfurter fallback failed for %s/%s: %s", base, quote, error)
+
+    # Last resort: flat static rate (honest — no synthetic movement).
+    return FALLBACK_RATES.get(f"{base}/{quote}", 1.0)
+    
+async def fetch_daily_change(pair: str) -> float | None:
+    """Return today's percent change for the pair via Twelve Data's /quote.
+
+    Gives a real intraday move to explain without needing two stored snapshots.
+    Returns None if unavailable (e.g. no key or provider is Frankfurter).
+    """
+    if not (
+        settings.MARKET_DATA_PROVIDER.lower() == "twelvedata"
+        and settings.TWELVE_DATA_API_KEY
+    ):
+        return None
+
+    base, quote = parse_pair(pair)
+    url = f"{settings.TWELVE_DATA_BASE_URL}/quote"
+    params = {"symbol": f"{base}/{quote}", "apikey": settings.TWELVE_DATA_API_KEY}
 
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            return float(data["rates"][quote])
+        if "percent_change" in data:
+            return round(float(data["percent_change"]), 4)
+    except Exception as error:
+        logger.warning("Twelve Data quote failed for %s: %s", pair, error)
 
-    except Exception:
-        base_rate = FALLBACK_RATES.get(f"{base}/{quote}", 1.0)
-        movement = random.uniform(-0.005, 0.005)
-        return round(base_rate * (1 + movement), 6)
-    
+    return None
+
+
 def calculate_spread(mid_rate: float) -> tuple[float, float, float]:
     spread = mid_rate * 0.0008
 
